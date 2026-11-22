@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nyomvonal-lejátszó</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #0f0f0f; --card: #0f0f0f; --raise: #272727; --raise2: #3a3a3a; --ink: #f1f1f1; --muted: #aaaaaa;
+    --line: #303030; --done: #e4572e; --accent: #3ea6ff; --warn: #ff8a80; --good: #7ee2a8;
+    color-scheme: dark; /* szándékosan csak sötét téma, mint a YouTube sötét módja */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 Roboto, system-ui, "Segoe UI", sans-serif; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .hidden { display: none !important; }
+
+  /* felső sáv */
+  .top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2000; height: 56px; display: flex; align-items: center; gap: 16px;
+    padding: 0 24px; background: var(--bg); }
+  .logo { font-weight: 700; font-size: 18px; letter-spacing: -.2px; white-space: nowrap; }
+  .logo i { display: inline-block; width: 28px; height: 20px; background: var(--done); border-radius: 6px;
+    vertical-align: -4px; margin-right: 6px; position: relative; }
+  .logo i::after { content: ""; position: absolute; left: 11px; top: 5px; border: 5px solid transparent;
+    border-left: 8px solid #fff; border-right: 0; }
+  .srcbar { flex: 1; display: flex; justify-content: center; gap: 8px; min-width: 0; }
+  .seg { display: flex; background: var(--raise); border-radius: 18px; padding: 3px; flex-shrink: 0; }
+  .seg button { border: 0; background: transparent; color: var(--ink); padding: 6px 14px; border-radius: 15px;
+    cursor: pointer; font: inherit; white-space: nowrap; }
+  .seg button.on { background: var(--ink); color: #0f0f0f; }
+  .search { display: flex; flex: 0 1 520px; min-width: 0; }
+  .search input { flex: 1; min-width: 0; background: #121212; border: 1px solid var(--line); border-right: 0;
+    color: var(--ink); padding: 8px 14px; border-radius: 20px 0 0 20px; font: inherit; }
+  .search button { background: var(--raise); border: 1px solid var(--line); color: var(--ink); padding: 0 18px;
+    border-radius: 0 20px 20px 0; cursor: pointer; font: inherit; }
+  .filepick { display: flex; align-items: center; }
+  .filepick input { color: var(--muted); font: inherit; max-width: 100%; }
+
+  /* fő elrendezés: videó + lebegő térképkártya (a YouTube chat helyén) */
+  .page { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 24px; padding: 8px 24px 40px;
+    max-width: 2000px; margin: 0 auto; }
+  .page.nomap { grid-template-columns: minmax(0, 1fr); }
+  .page.nomap .side { display: none; }
+  .stage { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; overflow: hidden;
+    max-height: calc(100vh - 170px); width: 100%; margin: 0 auto; }
+  .stage > * { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .stage canvas { cursor: pointer; }
+  h1 { font-size: 20px; margin: 12px 0 4px; font-weight: 700; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0 12px; }
+  .pill { background: var(--raise); color: var(--ink); border: 0; border-radius: 18px; padding: 8px 16px;
+    font: inherit; font-weight: 500; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+  .pill:hover { background: var(--raise2); }
+  .pill.primary { background: var(--ink); color: #0f0f0f; }
+  .pill input, .pill select { background: transparent; border: 0; color: var(--ink); font: inherit; width: 48px; }
+  .pill select option { background: var(--raise); }
+  .spacer { flex: 1; }
+  .stat { font-variant-numeric: tabular-nums; }
+  .panel { background: var(--raise); border-radius: 12px; padding: 12px 16px; margin-top: 12px; }
+  .panel h2 { font-size: 15px; margin: 0 0 6px; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 12px; }
+
+  .side { position: sticky; top: 64px; height: calc(100vh - 80px); min-height: 420px; }
+  .mapcard { height: 100%; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; background: var(--card); box-shadow: 0 8px 30px rgba(0,0,0,.45); }
+  .mapcard header { height: 52px; flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 0 8px 0 16px;
+    border-bottom: 1px solid var(--line); }
+  .mapcard header b { font-size: 16px; font-weight: 500; flex: 1; }
+  .icon { width: 36px; height: 36px; border-radius: 50%; border: 0; background: transparent; color: var(--ink);
+    cursor: pointer; font-size: 18px; display: grid; place-items: center; }
+  .icon:hover { background: var(--raise); }
+  .icon.on { color: var(--done); background: rgba(228, 87, 46, .15); }
+  .icon:disabled { opacity: .35; cursor: default; background: transparent; }
+  .note { margin-top: 8px; padding: 8px 12px; border-radius: 8px; background: var(--raise); color: var(--muted);
+    font-size: 13px; max-width: 75ch; }
+  .note[hidden] { display: none; }
+  .warnnote { color: var(--warn); }
+  body.artifact #map { background: #1d2420; }
+  .orient { position: relative; }
+  #compassNeedle { transition: transform .3s; }
+  .menu { position: absolute; right: 0; top: 40px; z-index: 3000; background: var(--raise); border-radius: 10px;
+    padding: 6px; min-width: 190px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+  .menu button { display: flex; width: 100%; gap: 10px; align-items: baseline; border: 0; background: transparent;
+    color: var(--ink); font: inherit; font-weight: 600; padding: 7px 8px; border-radius: 6px; cursor: pointer; text-align: left; }
+  .menu button span { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .menu button:hover { background: var(--raise2); }
+  .menu button.on { background: rgba(62, 166, 255, .18); }
+  .mapcard.locked .leaflet-control-zoom { opacity: .35; pointer-events: none; }
+  #map { flex: 1; background: #1b1b1b; }
+  .mapcard footer { flex-shrink: 0; border-top: 1px solid var(--line); padding: 10px 12px; display: flex; gap: 8px;
+    align-items: center; }
+  .now { flex: 1; min-width: 0; background: var(--raise); border-radius: 18px; padding: 7px 14px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .now small { color: var(--muted); margin-left: 6px; font-variant-numeric: tabular-nums; }
+
+  .rider { width: 18px; height: 18px; border-radius: 50%; background: var(--done); border: 3px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.5); cursor: grab; }
+  .leaflet-tooltip.tt { font-variant-numeric: tabular-nums; }
+  .chap-pin { width: 24px; height: 24px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+    background: #1f6feb; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); cursor: pointer;
+    display: grid; place-items: center; }
+  .chap-pin span { transform: rotate(45deg); color: #fff; font: bold 11px system-ui, sans-serif; }
+  .chap-pin.cur { background: var(--done); }
+
+  .chaps { list-style: none; margin: 6px 0 0; padding: 0; }
+  .chaps li { display: grid; grid-template-columns: 22px 56px minmax(0, 1fr) auto; gap: 6px; align-items: center;
+    padding: 4px 6px; border-radius: 8px; }
+  .chaps li.cur { background: rgba(228, 87, 46, .18); }
+  .chaps .n { width: 20px; height: 20px; border-radius: 50%; background: #1f6feb; color: #fff;
+    font: bold 11px system-ui; display: grid; place-items: center; }
+  .chaps li.cur .n { background: var(--done); }
+  .chaps .t { font-variant-numeric: tabular-nums; cursor: pointer; color: var(--accent); }
+  .chaps .t:hover { text-decoration: underline; }
+  .chaps input { border: 1px solid transparent; background: transparent; color: var(--ink); padding: 3px 6px;
+    border-radius: 6px; font: inherit; min-width: 0; }
+  .chaps input:hover, .chaps input:focus { border-color: var(--line); background: #121212; outline: none; }
+  .chaps .del { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 4px; }
+  textarea { width: 100%; min-height: 120px; margin-top: 6px; font: 12px/1.5 ui-monospace, Consolas, monospace;
+    background: #121212; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; resize: vertical; }
+  .warn { color: var(--warn); font-size: 12px; margin-top: 6px; }
+  .ok { color: var(--good); font-size: 12px; margin-top: 6px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .row input[type=number] { width: 90px; background: #121212; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font: inherit; }
+
+  @media (max-width: 1100px) {
+    .page { grid-template-columns: 1fr; padding: 8px 16px 32px; gap: 0; }
+    /* keskeny képernyőn: videó → térkép → minden más */
+    main { display: contents; }
+    .stage { order: 0; }
+    .side { position: static; height: 55vh; min-height: 300px; order: 1; margin-top: 12px; }
+    main > :not(.stage) { order: 2; }
+    .cols { grid-template-columns: 1fr; }
+    .top { padding: 0 16px; gap: 10px; }
+    .logo span { display: none; }
+  }
+  @media (max-width: 700px) {
+    .top { height: auto; flex-wrap: wrap; padding: 8px 16px; position: static; }
+    .srcbar { flex-wrap: wrap; justify-content: flex-start; }
+    .search { flex-basis: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="logo"><i></i><span>Nyomvonal</span></div>
+  <div class="srcbar">
+    <div class="seg tabs">
+      <button data-src="sim" class="on">Tesztvideó</button>
+      <button data-src="yt">YouTube</button>
+      <button data-src="file">Helyi videó</button>
+    </div>
+    <div id="ctlYt" class="search hidden">
+      <input type="text" id="ytUrl" placeholder="YouTube-link vagy videó-ID">
+      <button id="ytLoad">Betölt</button>
+    </div>
+    <div id="ctlFile" class="filepick hidden"><input type="file" id="videoFile" accept="video/*"></div>
+  </div>
+</div>
+
+<div class="page" id="page">
+  <main>
+    <div class="stage">
+      <canvas id="simCanvas" width="1280" height="720"></canvas>
+      <div id="ytWrap" class="hidden"><div id="ytPlayer"></div></div>
+      <video id="localVideo" class="hidden" controls playsinline></video>
+    </div>
+
+    <h1 id="trackName">Nyomvonal</h1>
+    <div class="muted" id="trackInfo"></div>
+    <div class="note" id="demoNote" hidden>
+      Bemutató változat: itt nincs háttértérkép és YouTube-lejátszó, mert ez a felület nem tölt be külső oldalakat.
+      Próbáld a tesztvideóval, vagy tölts be saját videót a „Helyi videó” fülön.
+    </div>
+    <div class="note warnnote" id="msg" hidden role="status"></div>
+
+    <div class="actions">
+      <span id="ctlSim" style="display:contents">
+        <button class="pill primary" id="simPlay">▶ Lejátszás</button>
+        <label class="pill">Hossz <input type="number" id="simDur" value="10" min="1" max="300"> perc</label>
+        <label class="pill">Sebesség <select id="simRate"><option>1</option><option>2</option><option selected>5</option><option>20</option></select>×</label>
+      </span>
+      <span class="spacer"></span>
+      <span class="pill stat" id="sTime">0:00</span>
+      <span class="pill stat" id="sDist">0,0 km</span>
+      <span class="pill stat" id="sPct">0%</span>
+      <button class="pill hidden" id="mapShow">Térkép megjelenítése</button>
+    </div>
+
+    <div class="cols">
+      <div class="panel">
+        <div style="display:flex; align-items:center; justify-content:space-between">
+          <h2>Fejezetek</h2>
+          <button class="pill" id="chapAdd">+ Fejezet itt</button>
+        </div>
+        <div class="muted">Új fejezet: gomb az aktuális pozícióra, vagy jobb klikk a nyomvonalon. A jelölő húzható.</div>
+        <ul class="chaps" id="chapList"></ul>
+      </div>
+      <div class="panel">
+        <div style="display:flex; align-items:center; justify-content:space-between">
+          <h2>YouTube-leírásba</h2>
+          <button class="pill" id="chapCopy">Másolás</button>
+        </div>
+        <textarea id="chapExport" readonly></textarea>
+        <div id="chapCheck"></div>
+      </div>
+      <div class="panel">
+        <h2>Szinkron</h2>
+        <div class="muted" id="syncMode"></div>
+        <div class="row" id="offsetRow">
+          <span class="muted">Eltolás (mp):</span>
+          <input type="number" id="offset" value="0" step="1">
+          <span class="muted">GPX-idő = videóidő + eltolás</span>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Másik GPX</h2>
+        <div class="row"><input type="file" id="gpxFile" accept=".gpx,application/gpx+xml" style="color:var(--muted)"></div>
+        <div class="muted" style="margin-top:8px">
+          Húzd a piros pontot a nyomvonalon, vagy kattints a vonalra – a videó odaugrik.
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <aside class="side">
+    <div class="mapcard">
+      <header>
+        <b>Útvonal</b>
+        <button class="icon" id="mapLock" title="Térkép rögzítése">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5" y="11" width="14" height="10" rx="2"/>
+            <path id="lockShackle" d="M8 11V7a4 4 0 0 1 7.5-2"/>
+          </svg>
+        </button>
+        <div class="orient">
+          <button class="icon" id="orientBtn" title="Tájolás">
+            <svg width="20" height="20" viewBox="0 0 24 24"><g id="compassNeedle" style="transform-origin:12px 12px">
+              <path d="M12 3 L15.5 12 L8.5 12 Z" fill="var(--done)"/>
+              <path d="M12 21 L15.5 12 L8.5 12 Z" fill="currentColor" opacity=".55"/>
+            </g></svg>
+          </button>
+          <div class="menu hidden" id="orientMenu">
+            <div class="muted" style="padding:2px 6px 6px">Felül legyen:</div>
+            <button data-o="N">É <span>észak</span></button>
+            <button data-o="E">K <span>kelet</span></button>
+            <button data-o="S">D <span>dél</span></button>
+            <button data-o="W">Ny <span>nyugat</span></button>
+            <button data-o="auto">Auto <span>legnagyobb nézet</span></button>
+          </div>
+        </div>
+        <button class="icon" id="mapFit" title="Teljes útvonal">⤢</button>
+        <button class="icon" id="mapFollow" title="Követés be/ki">◎</button>
+        <button class="icon" id="mapClose" title="Térkép elrejtése">✕</button>
+      </header>
+      <div id="map"></div>
+      <footer>
+        <div class="now" id="curChapName">–</div>
+        <button class="pill" id="chapAdd2" title="Fejezet az aktuális pozícióra">+ Fejezet</button>
+      </footer>
+    </div>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate.js"></script>
+<script src="track.js"></script>
+<script>
+// ---------- Nyomvonal-adatok ----------
+let T = null; // {name, lat[], lng[], cum[] (m), total, times[]|null (mp az elsőtől)}
+
+function hav(a1, o1, a2, o2) {
+  const R = 6371000, r = Math.PI / 180;
+  const da = (a2 - a1) * r, dn = (o2 - o1) * r;
+  const h = Math.sin(da / 2) ** 2 + Math.cos(a1 * r) * Math.cos(a2 * r) * Math.sin(dn / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function buildTrack(name, pts, times) {
+  const lat = pts.map(p => p[0]), lng = pts.map(p => p[1]);
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + hav(lat[i - 1], lng[i - 1], lat[i], lng[i]));
+  let t = null;
+  if (times && times.every(x => !isNaN(x))) { const t0 = times[0]; t = times.map(x => (x - t0) / 1000); }
+  return { name, lat, lng, cum, total: cum[cum.length - 1], times: t };
+}
+
+function parseGpx(text) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  let nodes = [...doc.getElementsByTagName("trkpt")];
+  if (!nodes.length) nodes = [...doc.getElementsByTagName("rtept")];
+  const pts = nodes.map(n => [parseFloat(n.getAttribute("lat")), parseFloat(n.getAttribute("lon"))]);
+  const tn = nodes.map(n => n.getElementsByTagName("time")[0]);
+  const times = tn.every(Boolean) ? tn.map(e => Date.parse(e.textContent)) : null;
+  const nm = doc.getElementsByTagName("name")[0];
+  return buildTrack(nm ? nm.textContent.trim() : "GPX", pts, times);
+}
+
+// ---------- Térkép ----------
+// Égtáj: melyik irány van a kártyán felül. bearing = a térkép forgatása fokban (leaflet-rotate).
+const ORIENT = { N: 0, E: 270, S: 180, W: 90 };
+let orient = "N";
+try { const o = localStorage.getItem("mapOrient"); if (o === "auto" || ORIENT[o] != null) orient = o; } catch (e) {}
+
+const map = L.map("map", {
+  zoomControl: true, zoomSnap: 0.25,
+  rotate: true, bearing: 0,
+  // forgatás csak a gombokkal, 90°-os lépésben
+  rotateControl: false, shiftKeyRotate: false, touchRotate: false, compassBearing: false
+});
+// Artifact-mód (a build_artifact.py kapcsolja be): ott a CSP tiltja a külső
+// térképcsempéket és a YouTube-beágyazást, ezért a nyomvonal háttér nélkül jelenik meg.
+const ARTIFACT = !!window.ARTIFACT_MODE;
+if (!ARTIFACT) {
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, attribution: "© OpenStreetMap"
+  }).addTo(map);
+} else {
+  document.body.classList.add("artifact");
+  document.querySelector('.tabs button[data-src="yt"]').remove();
+  document.getElementById("demoNote").hidden = false;
+}
+
+function showMsg(text) {
+  const el = document.getElementById("msg");
+  el.textContent = text; el.hidden = false;
+  clearTimeout(showMsg.t); showMsg.t = setTimeout(() => { el.hidden = true; }, 5000);
+}
+
+let baseLine, doneLine, hitLine, rider, hoverTip;
+
+function drawTrack() {
+  [baseLine, doneLine, hitLine, rider].forEach(l => l && map.removeLayer(l));
+  const ll = T.lat.map((a, i) => [a, T.lng[i]]);
+  baseLine = L.polyline(ll, { color: "#7a7a74", weight: 4, opacity: .8 }).addTo(map);
+  doneLine = L.polyline([], { color: "#e4572e", weight: 5 }).addTo(map);
+  // széles, láthatatlan vonal a könnyebb kattintáshoz
+  hitLine = L.polyline(ll, { weight: 22, opacity: 0, interactive: true }).addTo(map);
+  hitLine.on("click", e => { const i = nearestIdx(e.latlng); seekToIdx(i, true); });
+  hitLine.on("mousemove", e => {
+    const i = nearestIdx(e.latlng);
+    const vt = videoTimeForIdx(i);
+    const txt = `${fmtKm(T.cum[i])} · ${vt == null ? "–" : fmtTime(vt)}`;
+    if (!hoverTip) hoverTip = L.tooltip({ className: "tt", direction: "top", offset: [0, -8] });
+    hoverTip.setLatLng([T.lat[i], T.lng[i]]).setContent(txt);
+    if (!map.hasLayer(hoverTip)) hoverTip.addTo(map);
+  });
+  hitLine.on("mouseout", () => hoverTip && map.removeLayer(hoverTip));
+  hitLine.on("contextmenu", e => {
+    L.DomEvent.preventDefault(e.originalEvent);
+    addChapter(nearestIdx(e.latlng));
+  });
+
+  rider = L.marker(ll[0], {
+    // autoPanOnFocus: a leaflet-rotate forgatott nézetben rossz irányba görgetne, és a lakatot is megkerülné
+    draggable: true, zIndexOffset: 1000, autoPanOnFocus: false,
+    icon: L.divIcon({ className: "", html: '<div class="rider"></div>', iconSize: [18, 18], iconAnchor: [9, 9] })
+  }).addTo(map);
+  rider.on("dragstart", () => { dragging = true; dragIdx = curIdx; });
+  rider.on("drag", e => {
+    // helyi keresés az aktuális pont környékén, hogy oda-vissza szakaszokon ne ugorjon át
+    const i = nearestIdx(e.latlng, dragIdx, 150);
+    dragIdx = i;
+    rider.setLatLng([T.lat[i], T.lng[i]]);
+    updateDone(i, 0);
+    seekToIdx(i, false);
+  });
+  rider.on("dragend", () => { seekToIdx(dragIdx, true); dragging = false; });
+
+  fitTrack();
+  loadChapters();
+  document.getElementById("trackName").textContent = T.name;
+  document.getElementById("trackInfo").textContent =
+    `${T.lat.length} pont · ${fmtKm(T.total)}` + (T.times ? ` · ${fmtTime(T.times.at(-1))} rögzített idő` : " · időbélyeg nélkül");
+  updateSyncText();
+}
+
+// Saját illesztés forgatott nézethez: a valódi nyomvonalpontokat forgatjuk el,
+// nem a befoglaló téglalapot – így pontosan annyira nagyít, amennyire a kártya engedi.
+function fitInfo(bearing) {
+  const size = map.getSize(), pad = 30, z0 = 10;
+  const th = bearing * Math.PI / 180, c = Math.cos(th), s = Math.sin(th);
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < T.lat.length; i += 2) {
+    const p = map.project([T.lat[i], T.lng[i]], z0);
+    const x = p.x * c - p.y * s, y = p.x * s + p.y * c;
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  const scale = Math.min((size.x - 2 * pad) / Math.max(x1 - x0, 1), (size.y - 2 * pad) / Math.max(y1 - y0, 1));
+  const snap = map.options.zoomSnap;
+  const zoom = Math.min(map.getMaxZoom(), Math.floor((z0 + Math.log2(scale)) / snap) * snap);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;            // forgatott középpont
+  const center = map.unproject(L.point(cx * c + cy * s, -cx * s + cy * c), z0); // vissza-forgatva
+  return { zoom, center };
+}
+
+function bestOrient() {
+  // a 4 égtájból az, amelyiknél a legnagyobb a nagyítás
+  let best = "N", bz = -Infinity;
+  for (const k of ["N", "E", "S", "W"]) {
+    const z = fitInfo(ORIENT[k]).zoom;
+    if (z > bz + 0.01) { bz = z; best = k; }
+  }
+  return best;
+}
+
+function currentBearing() { return ORIENT[orient === "auto" ? bestOrient() : orient]; }
+
+function fitTrack() {
+  // a térkép mérete csak a CSS betöltése után végleges
+  map.invalidateSize();
+  if (!T || !baseLine) return;
+  const b = currentBearing();
+  map.setBearing(b);
+  const f = fitInfo(b);
+  map.setView(f.center, f.zoom, { animate: false });
+  updateCompass();
+}
+
+function updateCompass() {
+  const b = map.getBearing ? map.getBearing() : 0;
+  const n = document.getElementById("compassNeedle");
+  if (n) n.style.transform = `rotate(${b}deg)`;
+  document.querySelectorAll("#orientMenu button").forEach(x => x.classList.toggle("on", x.dataset.o === orient));
+  const lbl = { N: "É", E: "K", S: "D", W: "Ny" };
+  const cur = Object.keys(ORIENT).find(k => ORIENT[k] === Math.round(b) % 360) || "N";
+  document.getElementById("orientBtn").title = `Tájolás: ${lbl[cur]} felül` + (orient === "auto" ? " (automatikus)" : "");
+}
+window.addEventListener("load", () => setTimeout(fitTrack, 50));
+
+function nearestIdx(latlng, around = null, win = 0) {
+  const p = map.latLngToLayerPoint(latlng);
+  let lo = 0, hi = T.lat.length - 1;
+  if (around != null) { lo = Math.max(0, around - win); hi = Math.min(hi, around + win); }
+  let best = lo, bd = Infinity;
+  for (let i = lo; i <= hi; i++) {
+    const q = map.latLngToLayerPoint([T.lat[i], T.lng[i]]);
+    const d = (q.x - p.x) ** 2 + (q.y - p.y) ** 2;
+    if (d < bd) { bd = d; best = i; }
+  }
+  // ha a helyi ablakban messze van az egér, keressünk globálisan
+  if (around != null && bd > 60 * 60) return nearestIdx(latlng);
+  return best;
+}
+
+// ---------- Idő <-> pozíció ----------
+const offsetEl = document.getElementById("offset");
+function useTimes() { return !!T.times; }
+
+function posForVideoTime(t) {
+  // visszaad: {i, f} – i. pont és a következő közötti arány
+  const n = T.lat.length;
+  if (useTimes()) {
+    const g = t + (+offsetEl.value || 0);
+    if (g <= 0) return { i: 0, f: 0 };
+    if (g >= T.times[n - 1]) return { i: n - 1, f: 0 };
+    const i = bsearch(T.times, g);
+    const span = T.times[i + 1] - T.times[i];
+    return { i, f: span > 0 ? (g - T.times[i]) / span : 0 };
+  }
+  const dur = player.duration();
+  if (!dur) return { i: 0, f: 0 };
+  const d = Math.min(1, Math.max(0, t / dur)) * T.total;
+  if (d >= T.total) return { i: n - 1, f: 0 };
+  const i = bsearch(T.cum, d);
+  const span = T.cum[i + 1] - T.cum[i];
+  return { i, f: span > 0 ? (d - T.cum[i]) / span : 0 };
+}
+
+function videoTimeForIdx(i) {
+  if (useTimes()) return Math.max(0, T.times[i] - (+offsetEl.value || 0));
+  const dur = player.duration();
+  return dur ? (T.cum[i] / T.total) * dur : null;
+}
+
+function bsearch(arr, x) { // utolsó index, ahol arr[i] <= x
+  let lo = 0, hi = arr.length - 1;
+  while (lo < hi - 1) { const m = (lo + hi) >> 1; if (arr[m] <= x) lo = m; else hi = m; }
+  return lo;
+}
+
+function seekToIdx(i, final) {
+  const t = videoTimeForIdx(i);
+  if (t == null) return;
+  player.seek(t, final);
+}
+
+function updateSyncText() {
+  const el = document.getElementById("syncMode");
+  document.getElementById("offsetRow").classList.toggle("hidden", !useTimes());
+  el.textContent = useTimes()
+    ? "A GPX-ben van időbélyeg: a pozíció valós idő alapján, eltolással igazítva."
+    : "A GPX-ben nincs időbélyeg: a videó hosszát arányosan vetítem a távra (állandó sebességet feltételez).";
+}
+
+// ---------- Lejátszók (közös felület: time, duration, seek, playing) ----------
+const players = {};
+
+players.sim = (() => {
+  const cv = document.getElementById("simCanvas"), ctx = cv.getContext("2d");
+  let base = 0, startedAt = null;
+  const durEl = document.getElementById("simDur"), rateEl = document.getElementById("simRate");
+  const btn = document.getElementById("simPlay");
+  const rate = () => +rateEl.value;
+  const p = {
+    duration: () => (+durEl.value || 10) * 60,
+    time() {
+      const t = startedAt == null ? base : base + (performance.now() - startedAt) / 1000 * rate();
+      if (t >= p.duration()) { base = p.duration(); startedAt = null; btn.textContent = "▶ Lejátszás"; return base; }
+      return t;
+    },
+    seek(t) { base = Math.max(0, Math.min(t, p.duration())); if (startedAt != null) startedAt = performance.now(); },
+    toggle() {
+      if (startedAt == null) { if (base >= p.duration()) base = 0; startedAt = performance.now(); btn.textContent = "❚❚ Szünet"; }
+      else { base = p.time(); startedAt = null; btn.textContent = "▶ Lejátszás"; }
+    },
+    stop() { if (startedAt != null) p.toggle(); },
+    draw(t, pos) {
+      const W = cv.width, H = cv.height, k = t / p.duration();
+      // ég: napszak-szerű színátmenet, hogy látsszon a változás
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, `hsl(${205 - k * 180}, 60%, ${55 - k * 25}%)`);
+      g.addColorStop(1, `hsl(${30 + k * 10}, 50%, ${80 - k * 30}%)`);
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      // parallax hegyek – a "kamera" halad
+      const layers = [[0.15, "#4b5d67", 0.55, 90], [0.4, "#33453c", 0.68, 60], [1.2, "#22301f", 0.8, 35]];
+      for (const [sp, col, y0, amp] of layers) {
+        ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(0, H);
+        for (let x = 0; x <= W; x += 8) {
+          const u = (x + t * 120 * sp) / 140;
+          ctx.lineTo(x, H * y0 - amp * (Math.sin(u) * .6 + Math.sin(u * 2.3 + 1) * .3 + Math.sin(u * .37) * .5));
+        }
+        ctx.lineTo(W, H); ctx.fill();
+      }
+      // időkód
+      ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(24, 24, 360, 120);
+      ctx.fillStyle = "#fff"; ctx.font = "bold 64px ui-monospace, Consolas, monospace";
+      ctx.fillText(fmtTime(t, true), 40, 96);
+      ctx.font = "22px system-ui, sans-serif";
+      ctx.fillText(`TESZTVIDEÓ · ${fmtKm(T.cum[pos.i])}`, 40, 130);
+      // saját alsó sáv (csak jelzés)
+      ctx.fillStyle = "rgba(255,255,255,.3)"; ctx.fillRect(24, H - 20, W - 48, 6);
+      ctx.fillStyle = "#e4572e"; ctx.fillRect(24, H - 20, (W - 48) * k, 6);
+    }
+  };
+  btn.onclick = () => p.toggle();
+  durEl.onchange = () => p.seek(p.time());
+  cv.onclick = () => p.toggle();
+  return p;
+})();
+
+players.file = (() => {
+  const v = document.getElementById("localVideo");
+  document.getElementById("videoFile").onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    v.src = URL.createObjectURL(f); v.play().catch(() => {});
+  };
+  return {
+    duration: () => isFinite(v.duration) ? v.duration : 0,
+    time: () => v.currentTime || 0,
+    seek: t => { if (v.readyState) v.currentTime = t; },
+    stop: () => v.pause()
+  };
+})();
+
+players.yt = (() => {
+  let yt = null, ready = false, apiLoading = false, pendingId = null;
+  function parseId(s) {
+    s = s.trim();
+    const m = s.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([\w-]{11})/);
+    return m ? m[1] : (/^[\w-]{11}$/.test(s) ? s : null);
+  }
+  function create(id) {
+    yt = new YT.Player("ytPlayer", {
+      videoId: id, width: "100%", height: "100%",
+      playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
+      events: { onReady: () => { ready = true; } }
+    });
+  }
+  window.onYouTubeIframeAPIReady = () => { if (pendingId) create(pendingId); };
+  document.getElementById("ytLoad").onclick = () => {
+    const id = parseId(document.getElementById("ytUrl").value);
+    if (!id) { showMsg("Nem ismerem fel a YouTube-linket. Másold be a teljes címet (youtube.com/watch?v=…) vagy a 11 jeles videó-ID-t."); return; }
+    if (yt) { yt.loadVideoById(id); return; }
+    pendingId = id;
+    if (window.YT && YT.Player) create(id);
+    else if (!apiLoading) {
+      apiLoading = true;
+      const s = document.createElement("script"); s.src = "https://www.youtube.com/iframe_api";
+      document.head.appendChild(s);
+    }
+  };
+  let lastSeek = 0;
+  return {
+    duration: () => (ready && yt.getDuration()) || 0,
+    time: () => (ready && yt.getCurrentTime()) || 0,
+    seek(t, final) {
+      if (!ready) return;
+      const now = performance.now();
+      // húzás közben ritkítva, a végén pontos ugrás
+      if (final || now - lastSeek > 150) { yt.seekTo(t, !!final); lastSeek = now; }
+    },
+    stop: () => ready && yt.pauseVideo()
+  };
+})();
+
+let player = players.sim;
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  player.stop && player.stop();
+  const src = b.dataset.src;
+  player = players[src];
+  document.getElementById("simCanvas").classList.toggle("hidden", src !== "sim");
+  document.getElementById("ytWrap").classList.toggle("hidden", src !== "yt");
+  document.getElementById("localVideo").classList.toggle("hidden", src !== "file");
+  document.getElementById("ctlSim").classList.toggle("hidden", src !== "sim");
+  document.getElementById("ctlYt").classList.toggle("hidden", src !== "yt");
+  document.getElementById("ctlFile").classList.toggle("hidden", src !== "file");
+});
+
+// ---------- Fejezetek ----------
+// A fejezet a nyomvonal egy pontjához (indexéhez) kötődik, nem időhöz:
+// így más hosszú videónál / más eltolásnál is a helyén marad, az idő mindig számolt.
+let chapters = [];       // [{idx, name}] idx szerint rendezve
+let chapMarkers = [];
+let curChap = -1;
+
+// Becsült kezdő fejezetek a Grand Wexl Tourhoz (koordináta alapján a legközelebbi pontra illesztve).
+const DEFAULT_CHAPTERS = {
+  "Grand Wexl Tour": [
+    { name: "Rajt – Wexl Arena", at: null },
+    { name: "Hochwechsel", at: [47.5306, 15.9136] },
+    { name: "Aspang", at: [47.5520, 16.0900] }
+  ]
+};
+
+function storeKey() { return "chapters:" + T.name + ":" + T.lat.length; }
+
+function loadChapters() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(storeKey())); } catch (e) {}
+  if (Array.isArray(saved)) chapters = saved;
+  else {
+    chapters = (DEFAULT_CHAPTERS[T.name] || [{ name: "Rajt", at: null }]).map(c => ({
+      name: c.name, idx: c.at ? nearestIdxGeo(c.at) : 0
+    }));
+  }
+  chapters.sort((a, b) => a.idx - b.idx);
+  renderChapters();
+}
+
+function saveChapters() {
+  try { localStorage.setItem(storeKey(), JSON.stringify(chapters)); } catch (e) {}
+}
+
+function nearestIdxGeo([a, o]) {
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < T.lat.length; i++) {
+    const d = (T.lat[i] - a) ** 2 + ((T.lng[i] - o) * Math.cos(a * Math.PI / 180)) ** 2;
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+
+function addChapter(idx) {
+  // prompt() helyett: alapnévvel létrejön, és a listában rögtön átírható
+  // (beágyazott oldalakon, pl. artifactban a prompt() nem jelenik meg)
+  const c = { idx, name: "Fejezet " + (chapters.length + 1) };
+  chapters.push(c);
+  chapters.sort((a, b) => a.idx - b.idx);
+  saveChapters(); renderChapters();
+  const inp = document.querySelectorAll("#chapList input")[chapters.indexOf(c)];
+  if (inp) { inp.scrollIntoView({ block: "nearest" }); inp.focus(); inp.select(); }
+}
+
+function renderChapters() {
+  chapMarkers.forEach(m => map.removeLayer(m));
+  chapMarkers = chapters.map((c, k) => {
+    const m = L.marker([T.lat[c.idx], T.lng[c.idx]], {
+      draggable: true, zIndexOffset: 500, autoPanOnFocus: false,
+      icon: L.divIcon({ className: "", html: `<div class="chap-pin"><span>${k + 1}</span></div>`,
+        iconSize: [24, 24], iconAnchor: [3, 27] })
+    }).addTo(map);
+    m.bindTooltip(c.name, { direction: "top", offset: [9, -26] });
+    m.on("click", () => seekToIdx(c.idx, true));
+    m.on("drag", e => {
+      const i = nearestIdx(e.latlng, c.idx, 150);
+      c.idx = i; m.setLatLng([T.lat[i], T.lng[i]]);
+    });
+    m.on("dragend", () => {
+      chapters.sort((a, b) => a.idx - b.idx);
+      saveChapters(); renderChapters();
+    });
+    return m;
+  });
+
+  const ul = document.getElementById("chapList");
+  ul.innerHTML = "";
+  chapters.forEach((c, k) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="n">${k + 1}</span><span class="t"></span><input type="text"><button class="del" title="Törlés">×</button>`;
+    li.querySelector(".t").onclick = () => seekToIdx(c.idx, true);
+    const inp = li.querySelector("input");
+    inp.value = c.name; inp.title = fmtKm(T.cum[c.idx]);
+    inp.onchange = () => { c.name = inp.value.trim() || "Fejezet"; saveChapters(); renderChapters(); };
+    li.querySelector(".del").onclick = () => { chapters.splice(k, 1); saveChapters(); renderChapters(); };
+    ul.appendChild(li);
+  });
+  curChap = -1;
+  refreshChapterTimes();
+}
+
+// Időket és exportot újraszámolja (a videó hossza / eltolás változhat)
+let lastExportKey = "";
+function refreshChapterTimes() {
+  const times = chapters.map(c => videoTimeForIdx(c.idx));
+  const key = times.map(t => t == null ? "x" : Math.floor(t)).join(",") + "|" + chapters.map(c => c.name).join("|");
+  if (key === lastExportKey) return;
+  lastExportKey = key;
+
+  document.querySelectorAll("#chapList .t").forEach((el, k) => {
+    el.textContent = times[k] == null ? "–" : fmtTime(times[k]);
+  });
+
+  const out = document.getElementById("chapExport"), chk = document.getElementById("chapCheck");
+  if (times.some(t => t == null)) {
+    out.value = ""; chk.className = "muted"; chk.textContent = "Előbb tölts be videót (kell a hossza).";
+    return;
+  }
+  // a YouTube a mp-et lefelé kerekítve várja; az első fejezetnek 0:00-nak kell lennie
+  const secs = times.map(t => Math.floor(t));
+  out.value = chapters.map((c, k) => `${fmtTime(k === 0 ? 0 : secs[k])} ${c.name}`).join("\n");
+
+  const probs = [];
+  if (chapters.length < 3) probs.push("legalább 3 fejezet kell");
+  if (secs[0] > 0) probs.push(`az első fejezet ${fmtTime(secs[0])}-nál van, exportban 0:00-ra kerül`);
+  for (let k = 1; k < secs.length; k++) {
+    const len = secs[k] - (k === 1 ? 0 : secs[k - 1]);
+    if (len < 10) probs.push(`a(z) ${k}. fejezet rövidebb 10 mp-nél`);
+  }
+  if (secs.length && player.duration() - secs.at(-1) < 10) probs.push("az utolsó fejezet rövidebb 10 mp-nél");
+  chk.className = probs.length ? "warn" : "ok";
+  chk.textContent = probs.length ? "⚠️ YouTube-szabály: " + probs.join("; ") + "." : "✅ Megfelel a YouTube fejezetszabályainak.";
+}
+
+function highlightChapter(i) {
+  let k = -1;
+  for (let j = 0; j < chapters.length; j++) if (chapters[j].idx <= i) k = j;
+  if (k === curChap) return;
+  curChap = k;
+  document.querySelectorAll("#chapList li").forEach((li, j) => li.classList.toggle("cur", j === k));
+  chapMarkers.forEach((m, j) => {
+    const el = m.getElement()?.querySelector(".chap-pin");
+    if (el) el.classList.toggle("cur", j === k);
+  });
+}
+
+document.getElementById("chapAdd").onclick = () => addChapter(dragging ? dragIdx : curIdx);
+document.getElementById("chapAdd2").onclick = () => addChapter(dragging ? dragIdx : curIdx);
+
+// ---------- Térképkártya (lebegő panel) ----------
+const pageEl = document.getElementById("page");
+let follow = true;
+function setMapVisible(on) {
+  pageEl.classList.toggle("nomap", !on);
+  document.getElementById("mapShow").classList.toggle("hidden", on);
+  if (on) setTimeout(() => map.invalidateSize(), 0);
+}
+document.getElementById("mapClose").onclick = () => setMapVisible(false);
+document.getElementById("mapShow").onclick = () => setMapVisible(true);
+document.getElementById("mapFit").onclick = () => fitTrack();
+const followBtn = document.getElementById("mapFollow");
+function setFollow(on) { follow = on; followBtn.style.color = on ? "var(--accent)" : ""; }
+followBtn.onclick = () => setFollow(!follow);
+setFollow(true);
+map.on("dragstart", () => setFollow(false)); // kézi mozgatásnál ne rántsa vissza
+new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById("map"));
+
+// Tájolás-menü
+const orientMenu = document.getElementById("orientMenu");
+document.getElementById("orientBtn").onclick = e => { e.stopPropagation(); orientMenu.classList.toggle("hidden"); };
+document.addEventListener("click", e => { if (!orientMenu.contains(e.target)) orientMenu.classList.add("hidden"); });
+orientMenu.querySelectorAll("button").forEach(b => b.onclick = () => {
+  orient = b.dataset.o;
+  try { localStorage.setItem("mapOrient", orient); } catch (e) {}
+  orientMenu.classList.add("hidden");
+  fitTrack();
+});
+
+// Lakat: a háttértérkép nem mozdul (se húzás, se zoom, se követés),
+// de a nyomvonalra kattintás és a pontok húzása továbbra is működik.
+let locked = false;
+const lockBtn = document.getElementById("mapLock");
+const NAV = ["dragging", "touchZoom", "doubleClickZoom", "scrollWheelZoom", "boxZoom", "keyboard"];
+function setLocked(on) {
+  locked = on;
+  NAV.forEach(h => map[h] && (on ? map[h].disable() : map[h].enable()));
+  lockBtn.classList.toggle("on", on);
+  lockBtn.title = on ? "Térkép feloldása" : "Térkép rögzítése";
+  // zárt lakatnál a kengyel visszaér a testbe
+  document.getElementById("lockShackle").setAttribute("d", on ? "M8 11V7a4 4 0 0 1 8 0v4" : "M8 11V7a4 4 0 0 1 7.5-2");
+  document.querySelector(".mapcard").classList.toggle("locked", on);
+  document.getElementById("mapFit").disabled = on;
+  document.getElementById("orientBtn").disabled = on;
+  if (on) orientMenu.classList.add("hidden");
+  followBtn.disabled = on;
+  try { localStorage.setItem("mapLocked", on ? "1" : "0"); } catch (e) {}
+}
+lockBtn.onclick = () => setLocked(!locked);
+try { if (localStorage.getItem("mapLocked") === "1") setLocked(true); } catch (e) {}
+
+function followRider() {
+  if (locked) return;
+  if (!follow || dragging || pageEl.classList.contains("nomap")) return;
+  const ll = rider.getLatLng(), p = map.latLngToContainerPoint(ll), s = map.getSize();
+  // csak akkor mozdítjuk, ha a pont kimenne a belső 70%-ból – nyugodtabb kép.
+  // Képernyő-koordinátában nézzük, mert forgatott nézetben a getBounds() nem a látható területet adja.
+  const mx = s.x * 0.15, my = s.y * 0.15;
+  if (p.x < mx || p.x > s.x - mx || p.y < my || p.y > s.y - my) map.panTo(ll, { animate: true, duration: 0.6 });
+}
+document.getElementById("chapCopy").onclick = async () => {
+  const ta = document.getElementById("chapExport");
+  try { await navigator.clipboard.writeText(ta.value); }
+  catch (e) { ta.select(); document.execCommand("copy"); }
+};
+offsetEl.addEventListener("input", () => { lastExportKey = ""; });
+
+// ---------- Fő ciklus ----------
+let curIdx = 0, dragging = false, dragIdx = 0, lastDoneIdx = -1, frameNo = 0;
+
+function updateDone(i, f) {
+  if (i !== lastDoneIdx) {
+    const ll = []; for (let k = 0; k <= i; k++) ll.push([T.lat[k], T.lng[k]]);
+    doneLine.setLatLngs(ll); lastDoneIdx = i;
+  }
+}
+
+function frame() {
+  const t = player.time();
+  const pos = posForVideoTime(t);
+  if (!dragging) {
+    const { i, f } = pos, j = Math.min(i + 1, T.lat.length - 1);
+    rider.setLatLng([T.lat[i] + (T.lat[j] - T.lat[i]) * f, T.lng[i] + (T.lng[j] - T.lng[i]) * f]);
+    curIdx = i;
+    updateDone(i, f);
+  }
+  const i = dragging ? dragIdx : pos.i;
+  const dist = dragging ? T.cum[i] : T.cum[pos.i] + (T.cum[Math.min(pos.i + 1, T.cum.length - 1)] - T.cum[pos.i]) * pos.f;
+  document.getElementById("sTime").textContent = fmtTime(t);
+  document.getElementById("sDist").textContent = fmtKm(dist);
+  document.getElementById("sPct").textContent = Math.round(dist / T.total * 100) + "%";
+  if (player === players.sim) players.sim.draw(t, pos);
+  highlightChapter(i);
+  if (++frameNo % 15 === 0) {
+    refreshChapterTimes();
+    followRider();
+    const c = chapters[curChap];
+    document.getElementById("curChapName").innerHTML =
+      `${c ? escapeHtml(c.name) : "–"}<small>${fmtKm(dist)} / ${fmtKm(T.total)}</small>`;
+  }
+  requestAnimationFrame(frame);
+}
+
+// ---------- Segédek ----------
+function fmtTime(s, hh) {
+  s = Math.max(0, s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = Math.floor(s % 60);
+  return (h || hh ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0");
+}
+function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+function fmtKm(m) { return (m / 1000).toFixed(1).replace(".", ",") + " km"; }
+
+document.getElementById("gpxFile").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try { T = parseGpx(await f.text()); lastDoneIdx = -1; drawTrack(); }
+  catch (err) { showMsg("Nem sikerült beolvasni a GPX-et (" + err.message + "). Olyan fájl kell, amiben trkpt vagy rtept pontok vannak."); }
+};
+
+T = buildTrack(window.DEFAULT_TRACK.name, window.DEFAULT_TRACK.pts, null);
+drawTrack();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
